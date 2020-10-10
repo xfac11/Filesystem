@@ -7,6 +7,7 @@ FS::FS()
     CWD = ROOT_BLOCK;
     loadCWD();
     loadFAT();
+    printFAT();
 }
 
 FS::~FS()
@@ -31,15 +32,14 @@ FS::format()
       }
     }
     //Marks all blocks as free except root and FAT block.
+    memset(&fat, 0, sizeof(fat));
+    printFAT();
     fat[ROOT_BLOCK] = FAT_EOF;
     fat[FAT_BLOCK] = FAT_EOF;
-    for (size_t i = 2; i < BLOCK_SIZE/2; i++)
-    {
-      fat[i] = FAT_FREE;
-    }
     CWD = ROOT_BLOCK;
     memset(&currentDir, 0, sizeof(currentDir));
-
+    saveFAT();
+    saveCWD();
     return 0;
 }
 
@@ -57,25 +57,18 @@ FS::create(std::string filepath)
   {
     return -1;//No free entry found or filepath already exist
   }
-
   //This filepath does not exist so create it now
   std::string data;
   std::getline(std::cin, data); // get input until enter key is pressed
-  int firstBlock = saveDataToDisk(data); // save the data that was typed to disk
+  int firstBlock = saveDataToDisk(data);
   if(firstBlock == -1)
   {
     return -1;//Not enough blocks found
   }
+  createEntry(filepath.c_str(), freeEntry, firstBlock, data.size(), TYPE_FILE, 0);
 
-  dir_entry newFile;
-  strcpy(newFile.file_name, filepath.c_str());
-  newFile.type = TYPE_FILE;
-  newFile.size = data.size();
-  newFile.first_blk = firstBlock;
-  currentDir[freeEntry] = newFile;
-
-  saveFAT();//save fat to disk
   saveCWD();//save CWD to disk
+  saveFAT();//save FAT to disk
   std::cout << "FS::create(" << filepath << ")\n";
   return 0;
 }
@@ -119,10 +112,27 @@ FS::cp(std::string sourcefilepath, std::string destfilepath)
   {
     return -1;// Cannot find the file named sourcefilepath
   }
+  int freeEntry = locateFreeEntry(destfilepath);
+  if(freeEntry == -1)
+  {
+    return -1;//No free entry found or filepath already exist
+  }
   std::string data = readFAT(currentDir[sourceIndex].first_blk);
 
-    std::cout << "FS::cp(" << sourcefilepath << "," << destfilepath << ")\n";
-    return 0;
+  std::cout << "size before saveDataToDisk" <<data.size()<<std::endl;
+  int firstBlock = saveDataToDisk(data);
+  if(firstBlock == -1)
+  {
+    return -1;//Not enough blocks found
+  }
+  std::cout << "Entry being created with:" << destfilepath << " " << freeEntry << " " << firstBlock << " " << data.size() << std::endl;
+
+  createEntry(destfilepath.c_str(), freeEntry, firstBlock, uint32_t(data.size()), TYPE_FILE, 0);
+
+  saveCWD();//save CWD to disk
+  saveFAT();//save FAT to disk
+  std::cout << "FS::cp(" << sourcefilepath << "," << destfilepath << ")\n";
+  return 0;
 }
 
 // mv <sourcepath> <destpath> renames the file <sourcepath> to the name <destpath>,
@@ -188,7 +198,7 @@ FS::chmod(std::string accessrights, std::string filepath)
 int FS::saveFAT()
 {
   uint8_t buffer[BLOCK_SIZE];
-  memcpy(buffer, fat, BLOCK_SIZE/2);// cpy the fat into the buffer
+  memcpy(&buffer, fat, sizeof(fat));// cpy the fat into the buffer
   if(disk.write(FAT_BLOCK, buffer) == -1)
   {
     std::cout <<"Failed when writing the FAT to disk" << std::endl;
@@ -204,7 +214,7 @@ int FS::loadFAT()
     std::cout << "Failed when reading the FAT on disk" << std::endl;
     return -1;
   }// read index FAT_BLOCK into buffer
-  memcpy(fat, buffer, BLOCK_SIZE/2); // cpy the buffer into the fat
+  memcpy(&fat, buffer, sizeof(fat)); // cpy the buffer into the fat
   return 0;
 }
 int FS::getFreeBlock()// doesn't mark the block as not free
@@ -284,8 +294,10 @@ std::string FS::readFAT(int startBlock)
     std::cout << "Fat is corrupted or entered wrong startblock" << std::endl;
     return data;
   }
+  std::string temp;
   disk.read(currentBlock, buffer);
-  data.assign(buffer, buffer + sizeof(buffer));
+  temp.assign(buffer, buffer + sizeof(buffer));
+  data += temp.c_str();
   while (fat[currentBlock] != FAT_EOF)
   {
     currentBlock = fat[currentBlock];
@@ -295,14 +307,13 @@ std::string FS::readFAT(int startBlock)
       return data;
     }
     memset(buffer, 0, BLOCK_SIZE);
-    std::string temp;
     disk.read(currentBlock, buffer);
     temp.assign(buffer, buffer + sizeof(buffer));
-    data += temp;
+    data += temp.c_str();
   }
   return data;
 }
-int FS::locateFile(std::string filepath)
+int FS::locateFile(const std::string& filepath)
 {
   //return the index to the fileentry located in CWD
   for (int i = 0; i < ENTRY_COUNT; i++)
@@ -319,6 +330,7 @@ int FS::locateFile(std::string filepath)
 }
 int FS::saveDataToDisk(const std::string& data)
 {
+  std::cout <<"The data being copied: "<< data << std::endl;
   uint8_t buffer[BLOCK_SIZE];
   memset(buffer, 0, sizeof(buffer));
   uint32_t fileSize = data.size();
@@ -358,7 +370,7 @@ int FS::saveDataToDisk(const std::string& data)
   }
   int firstBlock = blocksArray[0];
   delete[] blocksArray;
-  return firstBlock; // returns first_blk
+  return firstBlock; // returns the first index to the FAT
 }
 int FS::locateFreeEntry(const std::string& name)
 {
@@ -378,4 +390,15 @@ int FS::locateFreeEntry(const std::string& name)
     }
   }
   return freeEntry;
+}
+int FS::createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights)
+{
+  dir_entry newFile;
+  strcpy(newFile.file_name, filepath);
+  newFile.type = type;
+  newFile.size = size;
+  newFile.first_blk = firstBlock;
+  newFile.access_rights = access_rights;
+  currentDir[entryIndex] = newFile;
+  return 0;
 }

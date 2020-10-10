@@ -46,7 +46,8 @@ private:
     //Returns -1 if not enough blocks found or the first blockIndex for the data
     int saveDataToDisk(const std::string& data);
     int locateFreeEntry(const std::string& name);
-    int locateFile(std::string filepath);
+    int locateFile(const std::string& filepath);
+    int createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights);
     void printFAT();
 public:
     FS();

@@ -356,7 +356,9 @@ int FS::saveDataToDisk(const std::string& data)
     disk.write(blocksArray[i], buffer);
     memset(buffer, 0, BLOCK_SIZE);// safe to reset the data in buffer to 0
   }
-  return blocksArray[0]; // returns first_blk
+  int firstBlock = blocksArray[0];
+  delete[] blocksArray;
+  return firstBlock; // returns first_blk
 }
 int FS::locateFreeEntry(const std::string& name)
 {

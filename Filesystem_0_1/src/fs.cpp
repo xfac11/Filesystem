@@ -52,72 +52,30 @@ FS::create(std::string filepath)
   loadCWD();// load the current working directory to currentDir
 
   // Locate free entry and check if name already exist.
-  int freeEntry = -1;
-  for (int i = 0; i < ENTRY_COUNT; i++)
+  int freeEntry = locateFreeEntry(filepath);
+  if(freeEntry == -1)
   {
-    std::string nameInDir;
-    std::string empty = "";
-    nameInDir = currentDir[i].file_name;
-    if(nameInDir == filepath && int(currentDir[i].type) == TYPE_FILE)
-    {
-      std::cout << "Filepath: " << nameInDir << " already exist" << std::endl;
-      return -1;
-    }
-    else if(nameInDir == empty && freeEntry == -1)//check for empty entry for new file and save the index.
-    {
-      freeEntry = i;
-    }
+    return -1;//No free entry found or filepath already exist
   }
 
   //This filepath does not exist so create it now
   std::string data;
   std::getline(std::cin, data); // get input until enter key is pressed
-  uint8_t buffer[BLOCK_SIZE];
-  memset(buffer, 0, sizeof(buffer));
-  uint32_t fileSize = data.size();
-  int nrOfBlocks = (int(fileSize) / BLOCK_SIZE) + 1; // example: (60/4096) + 1 = 1 block. (9053/4096) + 1 = 2 blocks
-  int dataCopied = 0;
-  int* blocksArray = new int[nrOfBlocks];
-  if(getFreeBlock(nrOfBlocks, blocksArray) == -1)
+  int firstBlock = saveDataToDisk(data); // save the data that was typed to disk
+  if(firstBlock == -1)
   {
-    return -1;//Not enough blocks found.
+    return -1;//Not enough blocks found
   }
 
   dir_entry newFile;
   strcpy(newFile.file_name, filepath.c_str());
   newFile.type = TYPE_FILE;
-  newFile.size = fileSize;
-  newFile.first_blk = blocksArray[0];
+  newFile.size = data.size();
+  newFile.first_blk = firstBlock;
   currentDir[freeEntry] = newFile;
-  for (int i = 0; i < nrOfBlocks; i++)
-  {
-    if((dataCopied + BLOCK_SIZE) < int(fileSize))// will the data that we are copying be larger than filesize.
-    {
-      memcpy(buffer, data.c_str() + dataCopied, BLOCK_SIZE);
-      /*copy data to buffer. Move in the dataarray by the bytes that we have actually copied.
-      example: 10000 bytes to copy. 0, 4096. After this it goes to the else.*/
-      dataCopied += BLOCK_SIZE;//Increase dataCopied with the bytes we copied.
-    }
-    else
-    {
-      //copy the remaining bytes
-      // example cont: The remaining is 8192. So move in the dataarray 8192 and copy the remaining bytes 10000-8192=1808.
-      memcpy(buffer, data.c_str() + dataCopied, int(fileSize) - dataCopied);
-    }
-    if(i == nrOfBlocks - 1)
-    {
-      fat[blocksArray[i]] = FAT_EOF;
-    }
-    else
-    {
-      fat[blocksArray[i]] = blocksArray[i+1];
-    }
-    disk.write(blocksArray[i], buffer);
-    memset(buffer, 0, BLOCK_SIZE);// safe to reset the data in buffer to 0
-  }
+
   saveFAT();//save fat to disk
   saveCWD();//save CWD to disk
-  delete[] blocksArray;
   std::cout << "FS::create(" << filepath << ")\n";
   return 0;
 }
@@ -156,6 +114,13 @@ FS::ls()
 int
 FS::cp(std::string sourcefilepath, std::string destfilepath)
 {
+  int sourceIndex = locateFile(sourcefilepath);
+  if(sourceIndex == -1)
+  {
+    return -1;// Cannot find the file named sourcefilepath
+  }
+  std::string data = readFAT(currentDir[sourceIndex].first_blk);
+
     std::cout << "FS::cp(" << sourcefilepath << "," << destfilepath << ")\n";
     return 0;
 }
@@ -351,4 +316,64 @@ int FS::locateFile(std::string filepath)
   }
   std::cout << "File: " << filepath << " could not be found " << std::endl;
   return -1;
+}
+int FS::saveDataToDisk(const std::string& data)
+{
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0, sizeof(buffer));
+  uint32_t fileSize = data.size();
+  int nrOfBlocks = (int(fileSize) / BLOCK_SIZE) + 1; // example: (60/4096) + 1 = 1 block. (9053/4096) + 1 = 2 blocks
+  int dataCopied = 0;
+  int* blocksArray = new int[nrOfBlocks];
+  if(getFreeBlock(nrOfBlocks, blocksArray) == -1)
+  {
+    return -1;//Not enough blocks found.
+  }
+
+  for (int i = 0; i < nrOfBlocks; i++)
+  {
+    if((dataCopied + BLOCK_SIZE) < int(fileSize))// will the data that we are copying be larger than filesize.
+    {
+      memcpy(buffer, data.c_str() + dataCopied, BLOCK_SIZE);
+      /*copy data to buffer. Move in the dataarray by the bytes that we have actually copied.
+      example: 10000 bytes to copy. 0, 4096. After this it goes to the else.*/
+      dataCopied += BLOCK_SIZE;//Increase dataCopied with the bytes we copied.
+    }
+    else
+    {
+      //copy the remaining bytes
+      // example cont: The remaining is 8192. So move in the dataarray 8192 and copy the remaining bytes 10000-8192=1808.
+      memcpy(buffer, data.c_str() + dataCopied, int(fileSize) - dataCopied);
+    }
+    if(i == nrOfBlocks - 1)
+    {
+      fat[blocksArray[i]] = FAT_EOF;
+    }
+    else
+    {
+      fat[blocksArray[i]] = blocksArray[i+1];
+    }
+    disk.write(blocksArray[i], buffer);
+    memset(buffer, 0, BLOCK_SIZE);// safe to reset the data in buffer to 0
+  }
+  return blocksArray[0]; // returns first_blk
+}
+int FS::locateFreeEntry(const std::string& name)
+{
+  int freeEntry = -1;
+  for (int i = 0; i < ENTRY_COUNT; i++)
+  {
+    std::string nameInDir = currentDir[i].file_name;
+    std::string empty = "";
+    if(nameInDir == name && int(currentDir[i].type) == TYPE_FILE)
+    {
+      std::cout << "Filepath: " << name << " already exist" << std::endl;
+      return -1;
+    }
+    else if(nameInDir == empty && freeEntry == -1)//check for empty entry for new file and save the index.
+    {
+      freeEntry = i;
+    }
+  }
+  return freeEntry;
 }

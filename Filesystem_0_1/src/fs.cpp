@@ -358,7 +358,7 @@ int FS::saveDataToDisk(const std::string& data)
   }
   int firstBlock = blocksArray[0];
   delete[] blocksArray;
-  return firstBlock; // returns first_blk
+  return firstBlock; // returns the first index to the FAT
 }
 int FS::locateFreeEntry(const std::string& name)
 {

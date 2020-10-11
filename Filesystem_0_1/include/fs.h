@@ -41,7 +41,9 @@ private:
     int saveCWD();
     int getFreeBlock();
     int getFreeBlock(int nrOfBlocks, int* blocks);
+    int getFreeBlock(int startBlock, int nrOfBlocks, int* blocks);
     std::string readFAT(int startBlock);
+    int getLastBlock(int startBlock);
     //Saves the data on disk. Updates the FAT but not the CWD
     //Returns -1 if not enough blocks found or the first blockIndex for the data
     int saveDataToDisk(const std::string& data);

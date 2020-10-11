@@ -140,6 +140,14 @@ FS::cp(std::string sourcefilepath, std::string destfilepath)
 int
 FS::mv(std::string sourcepath, std::string destpath)
 {
+
+  int index = locateFile(sourcepath);
+  if(index == -1)
+  {
+    return -1;//Could not find the sourcepath in CWD
+  }
+  strcpy(currentDir[index].file_name, destpath.c_str());
+  saveCWD();
     std::cout << "FS::mv(" << sourcepath << "," << destpath << ")\n";
     return 0;
 }
@@ -148,6 +156,31 @@ FS::mv(std::string sourcepath, std::string destpath)
 int
 FS::rm(std::string filepath)
 {
+  int index = locateFile(filepath);
+  if(index == -1)
+  {
+    return -1;
+  }
+  int firstBlock = currentDir[index].first_blk;
+  memset(&currentDir[index], 0, sizeof(dir_entry));//removes entry
+
+
+// Marks the blocks Free and write to disk with a 0 buffer
+  int nextBlock = fat[firstBlock];
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0, BLOCK_SIZE);
+  disk.write(firstBlock, buffer);
+  fat[firstBlock] = FAT_FREE;
+  while (nextBlock != FAT_EOF)
+  {
+    int index = nextBlock;
+    disk.write(nextBlock, buffer);
+    nextBlock = fat[nextBlock];
+    fat[index] = FAT_FREE;
+  }
+
+  saveCWD();
+  saveFAT();
     std::cout << "FS::rm(" << filepath << ")\n";
     return 0;
 }
@@ -157,6 +190,13 @@ FS::rm(std::string filepath)
 int
 FS::append(std::string filepath1, std::string filepath2)
 {
+  int file1Index = locateFile(filepath1);
+  int file2Index = locateFile(filepath2);
+
+  int file1FirstBlk = currentDir[file1Index].first_blk;
+  std::string dataFile1 = readFAT(file1FirstBlk);
+
+  int file2LastBlk = getLastBlock(currentDir[file2Index].first_blk);
     std::cout << "FS::append(" << filepath1 << "," << filepath2 << ")\n";
     return 0;
 }
@@ -401,4 +441,24 @@ int FS::createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, u
   newFile.access_rights = access_rights;
   currentDir[entryIndex] = newFile;
   return 0;
+}
+
+int getLastBlock(int startBlock)
+{
+  int16_t currentBlock = startBlock;
+  if(fat[currentBlock] == FAT_FREE)
+  {
+    std::cout << "Fat is corrupted or entered wrong startblock" << std::endl;
+    return -1;
+  }
+  while (fat[currentBlock] != FAT_EOF)
+  {
+    currentBlock = fat[currentBlock];
+    if(fat[currentBlock] == FAT_FREE)
+    {
+      std::cout << "Fat is corrupted or entered wrong startblock" << std::endl;
+      return -1;
+    }
+  }
+  return int(currentBlock);
 }

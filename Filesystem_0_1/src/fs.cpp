@@ -197,6 +197,7 @@ FS::append(std::string filepath1, std::string filepath2)
   std::string dataFile1 = readFAT(file1FirstBlk);
 
   int file2LastBlk = getLastBlock(currentDir[file2Index].first_blk);
+
     std::cout << "FS::append(" << filepath1 << "," << filepath2 << ")\n";
     return 0;
 }

@@ -33,10 +33,10 @@ FS::format()
     }
     //Marks all blocks as free except root and FAT block.
     memset(&fat, 0, sizeof(fat));
-    printFAT();
     fat[ROOT_BLOCK] = FAT_EOF;
     fat[FAT_BLOCK] = FAT_EOF;
     CWD = ROOT_BLOCK;
+    printFAT();
     memset(&currentDir, 0, sizeof(currentDir));
     saveFAT();
     saveCWD();
@@ -190,14 +190,25 @@ FS::rm(std::string filepath)
 int
 FS::append(std::string filepath1, std::string filepath2)
 {
-  int file1Index = locateFile(filepath1);
-  int file2Index = locateFile(filepath2);
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0, BLOCK_SIZE);
+  int fileIndex1 = locateFile(filepath1);
+  int fileIndex2 = locateFile(filepath2);
 
-  int file1FirstBlk = currentDir[file1Index].first_blk;
-  std::string dataFile1 = readFAT(file1FirstBlk);
+  int fileFirstBlk1 = currentDir[fileIndex1].first_blk;
+  std::string dataFile1 = readFAT(fileFirstBlk1);
 
-  int file2LastBlk = getLastBlock(currentDir[file2Index].first_blk);
-
+  int fileLastBlk2 = getLastBlock(currentDir[fileIndex2].first_blk);
+  disk.read(fileLastBlk2, buffer);
+  std::string dataLastBlk2;
+  std::string temp;
+  temp.assign(buffer, buffer + sizeof(buffer));
+  dataLastBlk2 = temp.c_str();
+  dataLastBlk2+=dataFile1;//appending filepath1 data to the end of filepath2
+  saveDataToDisk(fileLastBlk2, dataLastBlk2);
+  currentDir[fileIndex2].size = currentDir[fileIndex2].size +  dataFile1.size();
+  saveCWD();
+  saveFAT();
     std::cout << "FS::append(" << filepath1 << "," << filepath2 << ")\n";
     return 0;
 }
@@ -292,11 +303,32 @@ int FS::getFreeBlock(int nrOfBlocks, int* blocks)// doesn't mark the block as no
     {
       blocks[blocksFound] = i;
       blocksFound++;
-      if(blocksFound == nrOfBlocks)
-      {
-        return 0;// found the number of blocks
-      }
     }
+  }
+  if(blocksFound == nrOfBlocks)
+  {
+    return 0;// found the number of blocks
+  }
+  std::cout << "No free block found" << std::endl;
+  return -1; // no free block found
+}
+int FS::getFreeBlock(int startBlock, int nrOfBlocks, int* blocks)// doesn't mark the block as not free
+{
+  int startIndex = 2;// 0 is root and 1 is FAT so no need to check there
+  int blocksFound = 0;
+  blocks[0] = startBlock;//first block is the startBlock
+  blocksFound++;
+  for (int i = startIndex; i < BLOCK_SIZE/2 && nrOfBlocks != blocksFound; i++)
+  {
+    if(fat[i] == FAT_FREE)
+    {
+      blocks[blocksFound] = i;
+      blocksFound++;
+    }
+  }
+  if(blocksFound == nrOfBlocks)
+  {
+    return 0;// found the number of blocks
   }
   std::cout << "No free block found" << std::endl;
   return -1; // no free block found
@@ -413,6 +445,53 @@ int FS::saveDataToDisk(const std::string& data)
   delete[] blocksArray;
   return firstBlock; // returns the first index to the FAT
 }
+int FS::saveDataToDisk(int startBlock, const std::string& data)
+{
+  std::cout <<"The data being copied: "<< data << std::endl;
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0, sizeof(buffer));
+  uint32_t fileSize = data.size();
+  std::cout << "Filesize to save: " << fileSize << std::endl;
+  int nrOfBlocks = (int(fileSize) / BLOCK_SIZE) + 1; // example: (60/4096) + 1 = 1 block. (9053/4096) + 1 = 2 blocks
+  int dataCopied = 0;
+  int* blocksArray = new int[nrOfBlocks];
+  if(getFreeBlock(startBlock, nrOfBlocks, blocksArray) == -1)
+  {
+    return -1;//Not enough blocks found.
+  }
+  for (int i = 0; i < nrOfBlocks; i++) {
+    std::cout << "Writing to disk block:" << blocksArray[i] << std::endl;
+  }
+  for (int i = 0; i < nrOfBlocks; i++)
+  {
+    if((dataCopied + BLOCK_SIZE) < int(fileSize))// will the data that we are copying be larger than filesize.
+    {
+      memcpy(buffer, data.c_str() + dataCopied, BLOCK_SIZE);
+      /*copy data to buffer. Move in the dataarray by the bytes that we have actually copied.
+      example: 10000 bytes to copy. 0, 4096. After this it goes to the else.*/
+      dataCopied += BLOCK_SIZE;//Increase dataCopied with the bytes we copied.
+    }
+    else
+    {
+      //copy the remaining bytes
+      // example cont: The remaining is 8192. So move in the dataarray 8192 and copy the remaining bytes 10000-8192=1808.
+      memcpy(buffer, data.c_str() + dataCopied, int(fileSize) - dataCopied);
+    }
+    if(i == nrOfBlocks - 1)
+    {
+      fat[blocksArray[i]] = FAT_EOF;
+    }
+    else
+    {
+      fat[blocksArray[i]] = blocksArray[i+1];
+    }
+    disk.write(blocksArray[i], buffer);
+    memset(buffer, 0, BLOCK_SIZE);// safe to reset the data in buffer to 0
+  }
+  int firstBlock = blocksArray[0];
+  delete[] blocksArray;
+  return firstBlock; // returns the first index to the FAT
+}
 int FS::locateFreeEntry(const std::string& name)
 {
   int freeEntry = -1;
@@ -444,7 +523,7 @@ int FS::createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, u
   return 0;
 }
 
-int getLastBlock(int startBlock)
+int FS::getLastBlock(int startBlock)
 {
   int16_t currentBlock = startBlock;
   if(fat[currentBlock] == FAT_FREE)

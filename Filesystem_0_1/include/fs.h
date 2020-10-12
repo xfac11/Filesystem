@@ -41,12 +41,15 @@ private:
     int saveCWD();
     int getFreeBlock();
     int getFreeBlock(int nrOfBlocks, int* blocks);
+    //Forces the startBlock to be the first block in blocks[] and then searches as normal
+    //This creates a link between startblock and the other ones in blocks[]
     int getFreeBlock(int startBlock, int nrOfBlocks, int* blocks);
     std::string readFAT(int startBlock);
     int getLastBlock(int startBlock);
     //Saves the data on disk. Updates the FAT but not the CWD
     //Returns -1 if not enough blocks found or the first blockIndex for the data
     int saveDataToDisk(const std::string& data);
+    int saveDataToDisk(int startBlock, const std::string& data);
     int locateFreeEntry(const std::string& name);
     int locateFile(const std::string& filepath);
     int createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights);

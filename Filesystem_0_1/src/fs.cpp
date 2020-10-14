@@ -50,13 +50,19 @@ FS::create(std::string filepath)
 {
 
   loadCWD();// load the current working directory to currentDir
-  if(locateEntry(filepath, TYPE_DIR) > -1)
+
+  dir_entry loadedDir[ENTRY_COUNT];
+  memset(loadedDir, 0, sizeof(loadedDir));
+  std::string nameOfFile;
+  int dirBlock = loadDirectory(filepath, loadedDir, TYPE_FILE, nameOfFile);
+  std::cout << dirBlock << nameOfFile << std::endl;
+  if(locateEntry(loadedDir, nameOfFile, TYPE_DIR) != -1)
   {
     std::cout << "Error, a directory with the same filepath already exist" << std::endl;
     return -1;
   }
   // Locate free entry and check if name already exist.
-  int freeEntry = locateFreeEntry(currentDir, filepath, TYPE_FILE);
+  int freeEntry = locateFreeEntry(loadedDir, nameOfFile, TYPE_FILE);
   if(freeEntry == -1)
   {
     return -1;//No free entry found or filepath already exist
@@ -69,9 +75,24 @@ FS::create(std::string filepath)
   {
     return -1;//Not enough blocks found
   }
-  createEntry(filepath.c_str(), freeEntry, firstBlock, data.size(), TYPE_FILE, 0);
 
-  saveCWD();//save CWD to disk
+  createEntry(loadedDir, nameOfFile.c_str(), freeEntry, firstBlock, data.size(), TYPE_FILE, 0);
+
+  std::string testName = loadedDir[0].file_name;
+  std::cout << "Saved name:" << testName << std::endl;
+
+//saves the loaded directory
+
+
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0 , BLOCK_SIZE);
+  memcpy(buffer,loadedDir , sizeof(loadedDir));
+  if(disk.write(dirBlock, buffer) == -1)//Save the directory
+  {
+    std::cout <<"Failed when writing the CWD to disk" << std::endl;
+    return -1;
+  }
+
   saveFAT();//save FAT to disk
   std::cout << "FS::create(" << filepath << ")\n";
   return 0;
@@ -81,17 +102,21 @@ FS::create(std::string filepath)
 int
 FS::cat(std::string filepath)
 {
-  if(locateEntry(filepath, TYPE_DIR) > -1)
+  dir_entry loadedDir[ENTRY_COUNT];
+  memset(loadedDir, 0, sizeof(loadedDir));
+  std::string nameOfFile;
+  int dirBlock = loadDirectory(filepath, loadedDir, TYPE_FILE, nameOfFile);
+  if(locateEntry(loadedDir, nameOfFile, TYPE_DIR) > -1)
   {
     std::cout << "Error, filepath "<<  "'" <<filepath <<"'" << " is a directory" << std::endl;
     return -1;
   }
-  int indexIntoCWD = locateEntry(filepath, TYPE_FILE);
+  int indexIntoCWD = locateEntry(loadedDir, nameOfFile, TYPE_FILE);
   if(indexIntoCWD == -1)
   {
     return -1; // could not find the filename filepath
   }
-  std::string data = readFAT(currentDir[indexIntoCWD].first_blk);
+  std::string data = readFAT(loadedDir[indexIntoCWD].first_blk);
   std::cout << data << std::endl;
   std::cout << "FS::cat(" << filepath << ")\n";
   return 0;
@@ -101,6 +126,7 @@ FS::cat(std::string filepath)
 int
 FS::ls()
 {
+  loadCWD();
   std::string green("\033[0;32m");
   std::string blue("\033[0;33m");
   std::string reset("\033[0m");
@@ -108,8 +134,8 @@ FS::ls()
   for (int i = 0; i < ENTRY_COUNT; i++)
   {
     name = currentDir[i].file_name;
-    if(name == "")
-      continue;
+    //if(name == "")
+      //continue;
     std::cout << name << "  ";
     if(unsigned(currentDir[i].type) == 0)
     {
@@ -130,7 +156,8 @@ FS::ls()
 int
 FS::cp(std::string sourcefilepath, std::string destfilepath)
 {
-  int sourceIndex = locateEntry(sourcefilepath, TYPE_FILE);
+
+  int sourceIndex = locateEntry(currentDir, sourcefilepath, TYPE_FILE);
   if(sourceIndex == -1)
   {
     return -1;// Cannot find the file named sourcefilepath
@@ -164,8 +191,8 @@ int
 FS::mv(std::string sourcepath, std::string destpath)
 {
   loadCWD();
-  int destIndex = locateEntry(destpath, TYPE_FILE);
-  int sourceIndex = locateEntry(sourcepath, TYPE_FILE);
+  int destIndex = locateEntry(currentDir, destpath, TYPE_FILE);
+  int sourceIndex = locateEntry(currentDir, sourcepath, TYPE_FILE);
   if(sourceIndex != -1 && destIndex != -1)
   {
     //rename file
@@ -175,7 +202,7 @@ FS::mv(std::string sourcepath, std::string destpath)
   else if(sourceIndex != -1 && destIndex == -1)
   {
     //move sourcepath file to destpath directory
-    destIndex = locateEntry(destpath, TYPE_DIR);
+    destIndex = locateEntry(currentDir, destpath, TYPE_DIR);
     if(destIndex == -1)
     {
       return -1;//No entry found.
@@ -215,7 +242,7 @@ FS::mv(std::string sourcepath, std::string destpath)
 int
 FS::rm(std::string filepath)
 {
-  int index = locateEntry(filepath, TYPE_FILE);
+  int index = locateEntry(currentDir, filepath, TYPE_FILE);
   if(index == -1)
   {
     return -1;
@@ -251,8 +278,8 @@ FS::append(std::string filepath1, std::string filepath2)
 {
   uint8_t buffer[BLOCK_SIZE];
   memset(buffer, 0, BLOCK_SIZE);
-  int fileIndex1 = locateEntry(filepath1, TYPE_FILE);
-  int fileIndex2 = locateEntry(filepath2, TYPE_FILE);
+  int fileIndex1 = locateEntry(currentDir, filepath1, TYPE_FILE);
+  int fileIndex2 = locateEntry(currentDir, filepath2, TYPE_FILE);
 
   int fileFirstBlk1 = currentDir[fileIndex1].first_blk;
   std::string dataFile1 = readFAT(fileFirstBlk1);
@@ -313,7 +340,7 @@ FS::mkdir(std::string dirpath)
 int
 FS::cd(std::string dirpath)
 {
-  int dirEntry = locateEntry(dirpath, TYPE_DIR);
+  int dirEntry = locateEntry(currentDir, dirpath, TYPE_DIR);
   if(dirEntry == -1)
   {
     return -1;// Entry not found
@@ -520,14 +547,14 @@ std::string FS::readFAT(int startBlock)
   }
   return data;
 }
-int FS::locateEntry(const std::string& filepath, int type)
+int FS::locateEntry(dir_entry* directory, const std::string& filepath, int type)
 {
   //return the index to the fileentry located in CWD
   for (int i = 0; i < ENTRY_COUNT; i++)
   {
     std::string nameInDir;
-    nameInDir = currentDir[i].file_name;
-    if(nameInDir == filepath && int(currentDir[i].type) == type)
+    nameInDir = directory[i].file_name;
+    if(nameInDir == filepath && int(directory[i].type) == type)
     {
       return i;
     }
@@ -656,7 +683,17 @@ int FS::createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, u
   currentDir[entryIndex] = newFile;
   return 0;
 }
-
+int FS::createEntry(dir_entry* directory, const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights)
+{
+  dir_entry newFile;
+  strcpy(newFile.file_name, filepath);
+  newFile.type = type;
+  newFile.size = size;
+  newFile.first_blk = firstBlock;
+  newFile.access_rights = access_rights;
+  directory[entryIndex] = newFile;
+  return 0;
+}
 int FS::getLastBlock(int startBlock)
 {
   int16_t currentBlock = startBlock;
@@ -682,4 +719,60 @@ std::string FS::createString(uint8_t* buffer, int bufferSize)
   temp.assign(buffer, buffer + bufferSize);
 
   return std::string(temp.c_str());
+}
+int FS::loadDirectory(const std::string& filepath, dir_entry* theDirectory, int type, std::string& lastName)
+{
+  dir_entry loadedDir[ENTRY_COUNT];
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0 , BLOCK_SIZE);
+  //Seperating filepath with the seperator '/' into a vector
+  std::vector<std::string> sepVec;
+  std::string str;
+  std::istringstream path(filepath);
+  while (std::getline(path,str,'/'))
+  {
+    if(str !="")
+    {
+      sepVec.push_back(str);
+    }
+  }
+
+  if(filepath[0] == '/')//Absolute path
+  {
+    disk.read(ROOT_BLOCK, buffer);
+    memcpy(&loadedDir, buffer, sizeof(loadedDir));
+  }
+  else//Relative path
+  {
+    memcpy(&loadedDir, currentDir, sizeof(loadedDir));
+  }
+  int count = 0;
+  if(type == TYPE_DIR)
+  {
+    count = sepVec.size();//Path is just only directories
+  }
+  else if(type == TYPE_FILE)
+  {
+    count = sepVec.size() -1;//Path is ending with a filename
+  }
+  dir_entry subDirEntry;
+  int subDirBlock = ROOT_BLOCK;
+  for (int i = 0; i < count; i++)
+  {
+    int dirIndex = locateEntry(loadedDir, sepVec[i], TYPE_DIR);
+    if(dirIndex == -1)
+    {
+      return -1;
+    }
+    subDirEntry = loadedDir[dirIndex];//sub-directory
+    subDirBlock = subDirEntry.first_blk;
+    disk.read(subDirBlock, buffer);
+    memcpy(&loadedDir, buffer, sizeof(loadedDir));
+  }
+
+  lastName = std::string(sepVec[sepVec.size()-1]);//either the last loaded directory or a name of a file
+
+  memcpy(theDirectory, loadedDir, sizeof(loadedDir));
+
+  return subDirBlock;//returning the block to the loaded directory
 }

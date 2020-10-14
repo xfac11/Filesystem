@@ -2,6 +2,8 @@
 #include <cstdint>
 #include "disk.h"
 #include <string.h>
+#include <sstream>
+
 #include <vector>
 #ifndef __FS_H__
 #define __FS_H__
@@ -41,6 +43,7 @@ private:
     int loadCWD();
     int saveCWD();
     int getFreeBlock();
+    int loadDirectory(const std::string& filepath, dir_entry* theDirectory, int type, std::string& lastName);
     int getFreeBlock(int nrOfBlocks, int* blocks);
     //Forces the startBlock to be the first block in blocks[] and then searches as normal
     //This creates a link between startblock and the other ones in blocks[]
@@ -54,8 +57,10 @@ private:
     //Checks if name already exist and gives error otherwise returns a free entry
     int locateFreeEntry(dir_entry* directory, const std::string& name, int type);
     //Checks if name exist and returns its index
-    int locateEntry(const std::string& filepath, int type);
+    int locateEntry(dir_entry* directory, const std::string& filepath, int type);
     //creates an entry and insert it into currentdir[entryIndex]
+    int createEntry(dir_entry* directory, const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights);
+
     int createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights);
     void printFAT();
     std::string createString(uint8_t* buffer, int bufferSize);

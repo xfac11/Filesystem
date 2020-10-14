@@ -2,6 +2,7 @@
 #include <cstdint>
 #include "disk.h"
 #include <string.h>
+#include <vector>
 #ifndef __FS_H__
 #define __FS_H__
 
@@ -50,10 +51,14 @@ private:
     //Returns -1 if not enough blocks found or the first blockIndex for the data
     int saveDataToDisk(const std::string& data);
     int saveDataToDisk(int startBlock, const std::string& data);
-    int locateFreeEntry(const std::string& name);
-    int locateFile(const std::string& filepath);
+    //Checks if name already exist and gives error otherwise returns a free entry
+    int locateFreeEntry(dir_entry* directory, const std::string& name, int type);
+    //Checks if name exist and returns its index
+    int locateEntry(const std::string& filepath, int type);
+    //creates an entry and insert it into currentdir[entryIndex]
     int createEntry(const char* filepath, int entryIndex, uint16_t firstBlock, uint32_t size, uint8_t type, uint8_t access_rights);
     void printFAT();
+    std::string createString(uint8_t* buffer, int bufferSize);
 public:
     FS();
     ~FS();

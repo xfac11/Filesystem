@@ -82,15 +82,23 @@ FS::create(std::string filepath)
   std::cout << "Saved name:" << testName << std::endl;
 
 //saves the loaded directory
-
-
-  uint8_t buffer[BLOCK_SIZE];
-  memset(buffer, 0 , BLOCK_SIZE);
-  memcpy(buffer,loadedDir , sizeof(loadedDir));
-  if(disk.write(dirBlock, buffer) == -1)//Save the directory
+//If it is the CWD we just copy the updated loadedDir to currentDir and save CWD
+//Else we save it to the corresponding block and do not update or save CWD because it isn't effected by it
+  if(int(CWD) == dirBlock)
   {
-    std::cout <<"Failed when writing the CWD to disk" << std::endl;
-    return -1;
+    memcpy(currentDir, loadedDir, sizeof(currentDir));
+    saveCWD();
+  }
+  else
+  {
+    uint8_t buffer[BLOCK_SIZE];
+    memset(buffer, 0 , BLOCK_SIZE);
+    memcpy(buffer,loadedDir , sizeof(loadedDir));
+    if(disk.write(dirBlock, buffer) == -1)//Save the directory
+    {
+      std::cout <<"Failed when writing the CWD to disk" << std::endl;
+      return -1;
+    }
   }
 
   saveFAT();//save FAT to disk
@@ -105,18 +113,21 @@ FS::cat(std::string filepath)
   dir_entry loadedDir[ENTRY_COUNT];
   memset(loadedDir, 0, sizeof(loadedDir));
   std::string nameOfFile;
-  int dirBlock = loadDirectory(filepath, loadedDir, TYPE_FILE, nameOfFile);
+  loadDirectory(filepath, loadedDir, TYPE_FILE, nameOfFile);
+
+  std::cout << "Loaded the directory" << std::endl;
   if(locateEntry(loadedDir, nameOfFile, TYPE_DIR) > -1)
   {
     std::cout << "Error, filepath "<<  "'" <<filepath <<"'" << " is a directory" << std::endl;
     return -1;
   }
-  int indexIntoCWD = locateEntry(loadedDir, nameOfFile, TYPE_FILE);
-  if(indexIntoCWD == -1)
+  int loadedIndex = locateEntry(loadedDir, nameOfFile, TYPE_FILE);
+  std::cout << "Located entry" << std::endl;
+  if(loadedIndex == -1)
   {
     return -1; // could not find the filename filepath
   }
-  std::string data = readFAT(loadedDir[indexIntoCWD].first_blk);
+  std::string data = readFAT(loadedDir[loadedIndex].first_blk);
   std::cout << data << std::endl;
   std::cout << "FS::cat(" << filepath << ")\n";
   return 0;
@@ -134,8 +145,8 @@ FS::ls()
   for (int i = 0; i < ENTRY_COUNT; i++)
   {
     name = currentDir[i].file_name;
-    //if(name == "")
-      //continue;
+    if(name == "")
+      continue;
     std::cout << name << "  ";
     if(unsigned(currentDir[i].type) == 0)
     {
@@ -156,18 +167,28 @@ FS::ls()
 int
 FS::cp(std::string sourcefilepath, std::string destfilepath)
 {
+  dir_entry sourceDirectory[ENTRY_COUNT];
+  dir_entry destDirectory[ENTRY_COUNT];
 
-  int sourceIndex = locateEntry(currentDir, sourcefilepath, TYPE_FILE);
+//load the sourcefilepath directory and the destfilepath directory
+  std::string nameOfFile;
+  std::string nameOfCopy;
+  loadDirectory(sourcefilepath, sourceDirectory, TYPE_FILE, nameOfFile);
+  int destBlock = loadDirectory(destfilepath, destDirectory, TYPE_FILE, nameOfCopy);
+
+  //First locate the file in sourceDirectory and if found copy the data.
+
+  int sourceIndex = locateEntry(sourceDirectory, nameOfFile, TYPE_FILE);
   if(sourceIndex == -1)
   {
     return -1;// Cannot find the file named sourcefilepath
   }
-  int freeEntry = locateFreeEntry(currentDir, destfilepath, TYPE_FILE);
+  int freeEntry = locateFreeEntry(destDirectory, nameOfCopy, TYPE_FILE);
   if(freeEntry == -1)
   {
     return -1;//No free entry found or filepath already exist
   }
-  std::string data = readFAT(currentDir[sourceIndex].first_blk);
+  std::string data = readFAT(sourceDirectory[sourceIndex].first_blk);
 
   std::cout << "size before saveDataToDisk" <<data.size()<<std::endl;
   int firstBlock = saveDataToDisk(data);
@@ -177,9 +198,27 @@ FS::cp(std::string sourcefilepath, std::string destfilepath)
   }
   std::cout << "Entry being created with:" << destfilepath << " " << freeEntry << " " << firstBlock << " " << data.size() << std::endl;
 
-  createEntry(destfilepath.c_str(), freeEntry, firstBlock, uint32_t(data.size()), TYPE_FILE, 0);
+  createEntry(destDirectory, nameOfCopy.c_str(), freeEntry, firstBlock, uint32_t(data.size()), TYPE_FILE, 0);
 
-  saveCWD();//save CWD to disk
+
+//Save the destDirectory. The sourceDirectory hasn't been changed so no need to save it.
+  if(int(CWD) == destBlock)
+  {
+    memcpy(currentDir, destDirectory, sizeof(currentDir));
+    saveCWD();
+  }
+  else
+  {
+    uint8_t buffer[BLOCK_SIZE];
+    memset(buffer, 0 , BLOCK_SIZE);
+    memcpy(buffer,destDirectory , sizeof(destDirectory));
+    if(disk.write(destBlock, buffer) == -1)//Save the directory
+    {
+      std::cout <<"Failed when writing the CWD to disk" << std::endl;
+      return -1;
+    }
+  }
+
   saveFAT();//save FAT to disk
   std::cout << "FS::cp(" << sourcefilepath << "," << destfilepath << ")\n";
   return 0;
@@ -191,48 +230,79 @@ int
 FS::mv(std::string sourcepath, std::string destpath)
 {
   loadCWD();
-  int destIndex = locateEntry(currentDir, destpath, TYPE_FILE);
-  int sourceIndex = locateEntry(currentDir, sourcepath, TYPE_FILE);
-  if(sourceIndex != -1 && destIndex != -1)
+
+  dir_entry sourceDirectory[ENTRY_COUNT];
+  dir_entry destDirectory[ENTRY_COUNT];
+
+  std::string nameOfFile;
+  std::string nameOfDirectory;
+  uint8_t buffer[BLOCK_SIZE];
+
+
+  int sourceBlock = loadDirectory(sourcepath, sourceDirectory, TYPE_FILE, nameOfFile);
+  int destBlock = loadDirectory(destpath, destDirectory, TYPE_DIR, nameOfDirectory);
+
+  int testIfDirectory = locateEntry(currentDir, nameOfDirectory, TYPE_DIR);//Check if it's a directory
+
+  if(destpath.find('/') == std::string::npos && testIfDirectory == -1)//rename file
   {
-    //rename file
-    strcpy(currentDir[sourceIndex].file_name, destpath.c_str());
-    saveCWD();
-  }
-  else if(sourceIndex != -1 && destIndex == -1)
-  {
-    //move sourcepath file to destpath directory
-    destIndex = locateEntry(currentDir, destpath, TYPE_DIR);
-    if(destIndex == -1)
+    int destIndex = locateEntry(sourceDirectory, destpath, TYPE_FILE);//Check if exist
+    int sourceIndex = locateEntry(sourceDirectory, nameOfFile, TYPE_FILE);//locate to change the name
+    if(sourceIndex != -1 && destIndex == -1)
     {
-      return -1;//No entry found.
+      //rename file
+      strcpy(sourceDirectory[sourceIndex].file_name, destpath.c_str());
+
+      memset(buffer, 0 , BLOCK_SIZE);
+      memcpy(buffer,sourceDirectory , sizeof(sourceDirectory));
+      if(disk.write(sourceBlock, buffer) == -1)//Save the directory
+      {
+        std::cout <<"Failed when writing the CWD to disk" << std::endl;
+        return -1;
+      }
+
     }
-    //Load destDir
-    uint8_t buffer[BLOCK_SIZE];
-    dir_entry destDir[ENTRY_COUNT];
-    memset(buffer, 0, BLOCK_SIZE);
-    uint16_t destBlock = currentDir[destIndex].first_blk;
-    disk.read(destBlock, buffer);
-    memcpy(&destDir, buffer, sizeof(destDir));
-
-
-
-    //Free entry from currentdir
-    dir_entry sourceFile = currentDir[sourceIndex];
-    memset(&currentDir[sourceIndex], 0, sizeof(dir_entry));
-    //find free entry in destDir
-    int freeEntry = locateFreeEntry(destDir, sourcepath, TYPE_FILE);
-    destDir[freeEntry] = sourceFile;
-    //Save destDir to disk
-    memset(buffer, 0, BLOCK_SIZE);
-    memcpy(&buffer, destDir, sizeof(destDir));
-    disk.write(destBlock, buffer);
-    saveCWD();
   }
-  else
+  else//move file
   {
-    return -1;
+    std::cout << "Moving file" << std::endl;
+    int sourceIndex = locateEntry(sourceDirectory, nameOfFile, TYPE_FILE);
+    //move sourcepath file to destpath directory
+    if(destBlock == -1)
+    {
+      return -1;//No directory found.
+    }
+    //Free entry from currentdir
+    dir_entry sourceFile = sourceDirectory[sourceIndex];
+    memset(&sourceDirectory[sourceIndex], 0, sizeof(dir_entry));
+    //find free entry in destDir
+    int freeEntry = locateFreeEntry(destDirectory, nameOfFile, TYPE_FILE);
+    destDirectory[freeEntry] = sourceFile;
+    //Save destDirectory to disk
+    memset(buffer, 0, BLOCK_SIZE);
+    memcpy(buffer, destDirectory, sizeof(destDirectory));
+    disk.write(destBlock, buffer);
+
+    //Save sourceDirectory to disk
+    memset(buffer, 0 , BLOCK_SIZE);
+    memcpy(buffer,sourceDirectory , sizeof(sourceDirectory));
+    if(disk.write(sourceBlock, buffer) == -1)//Save the directory
+    {
+      std::cout <<"Failed when writing the CWD to disk" << std::endl;
+      return -1;
+    }
   }
+
+//If any of the two were CWD we update currentDir
+  if(int(CWD) == sourceBlock)
+  {
+    memcpy(currentDir, sourceDirectory, sizeof(currentDir));
+  }
+  else if(int(CWD) == destBlock)
+  {
+    memcpy(currentDir, destDirectory, sizeof(currentDir));
+  }
+
 
     std::cout << "FS::mv(" << sourcepath << "," << destpath << ")\n";
     return 0;
@@ -242,13 +312,18 @@ FS::mv(std::string sourcepath, std::string destpath)
 int
 FS::rm(std::string filepath)
 {
-  int index = locateEntry(currentDir, filepath, TYPE_FILE);
+
+  dir_entry directory[ENTRY_COUNT];
+  std::string nameOfFile;
+  int dirBlock = loadDirectory(filepath, directory, TYPE_FILE, nameOfFile);
+
+  int index = locateEntry(directory, nameOfFile, TYPE_FILE);
   if(index == -1)
   {
     return -1;
   }
-  int firstBlock = currentDir[index].first_blk;
-  memset(&currentDir[index], 0, sizeof(dir_entry));//removes entry
+  int firstBlock = directory[index].first_blk;
+  memset(&directory[index], 0, sizeof(dir_entry));//removes entry
 
 
 // Marks the blocks Free and write to disk with a 0 buffer
@@ -265,7 +340,22 @@ FS::rm(std::string filepath)
     fat[index] = FAT_FREE;
   }
 
-  saveCWD();
+  if(int(CWD) == dirBlock)
+  {
+    memcpy(currentDir, directory, sizeof(currentDir));
+    saveCWD();
+  }
+  else
+  {
+    uint8_t buffer[BLOCK_SIZE];
+    memset(buffer, 0 , BLOCK_SIZE);
+    memcpy(buffer,directory , sizeof(directory));
+    if(disk.write(dirBlock, buffer) == -1)//Save the directory
+    {
+      std::cout <<"Failed when writing the directory to disk" << std::endl;
+      return -1;
+    }
+  }
   saveFAT();
     std::cout << "FS::rm(" << filepath << ")\n";
     return 0;
@@ -278,20 +368,45 @@ FS::append(std::string filepath1, std::string filepath2)
 {
   uint8_t buffer[BLOCK_SIZE];
   memset(buffer, 0, BLOCK_SIZE);
-  int fileIndex1 = locateEntry(currentDir, filepath1, TYPE_FILE);
-  int fileIndex2 = locateEntry(currentDir, filepath2, TYPE_FILE);
 
-  int fileFirstBlk1 = currentDir[fileIndex1].first_blk;
+  std::string nameOfFile1;
+  std::string nameOfFile2;
+  dir_entry sourceDirectory[ENTRY_COUNT];
+  dir_entry destDirectory[ENTRY_COUNT];
+
+  int sourceBlock = loadDirectory(filepath1, sourceDirectory, TYPE_FILE, nameOfFile1);
+  int destBlock = loadDirectory(filepath2, destDirectory, TYPE_FILE, nameOfFile2);
+  int fileIndex1 = locateEntry(sourceDirectory, nameOfFile1, TYPE_FILE);
+  int fileIndex2 = locateEntry(destDirectory, nameOfFile2, TYPE_FILE);
+
+  int fileFirstBlk1 = sourceDirectory[fileIndex1].first_blk;
   std::string dataFile1 = readFAT(fileFirstBlk1);
 
-  int fileLastBlk2 = getLastBlock(currentDir[fileIndex2].first_blk);
+  int fileLastBlk2 = getLastBlock(destDirectory[fileIndex2].first_blk);
   disk.read(fileLastBlk2, buffer);
   std::string dataLastBlk2;
   dataLastBlk2 = createString(buffer, BLOCK_SIZE);// create a string with uint8_t buffer
-  dataLastBlk2+=dataFile1;//appending filepath1 data to the end of filepath2
+  dataLastBlk2 += dataFile1;//appending filepath1 data to the end of filepath2
   saveDataToDisk(fileLastBlk2, dataLastBlk2);
-  currentDir[fileIndex2].size = currentDir[fileIndex2].size +  dataFile1.size();
-  saveCWD();
+  destDirectory[fileIndex2].size = destDirectory[fileIndex2].size +  dataFile1.size();
+
+
+  if(int(CWD) == destBlock)
+  {
+    memcpy(currentDir, destDirectory, sizeof(currentDir));
+    saveCWD();
+  }
+  else
+  {
+    uint8_t buffer[BLOCK_SIZE];
+    memset(buffer, 0 , BLOCK_SIZE);
+    memcpy(buffer,destDirectory , sizeof(destDirectory));
+    if(disk.write(destBlock, buffer) == -1)//Save the directory
+    {
+      std::cout <<"Failed when writing the directory to disk" << std::endl;
+      return -1;
+    }
+  }
   saveFAT();
     std::cout << "FS::append(" << filepath1 << "," << filepath2 << ")\n";
     return 0;
@@ -303,13 +418,17 @@ int
 FS::mkdir(std::string dirpath)
 {
   //create the directory entry and update FAT
-  int dirEntry = locateFreeEntry(currentDir, dirpath, TYPE_DIR);
+  dir_entry directory[ENTRY_COUNT];
+  std::string nameOfDirectory;
+  //TYPE_FILE so loadDirectory doesn't try to load a directory that doesn't exist yey
+  int dirBlock = loadDirectory(dirpath, directory, TYPE_FILE, nameOfDirectory);
+  int dirEntry = locateFreeEntry(directory, nameOfDirectory, TYPE_DIR);
   if(dirEntry == -1)
   {
     return -1;//Name already exist
   }
   int freeBlock = getFreeBlock();
-  createEntry(dirpath.c_str(), dirEntry, freeBlock, 0, TYPE_DIR, 0);
+  createEntry(directory, nameOfDirectory.c_str(), dirEntry, freeBlock, 0, TYPE_DIR, 0);
   fat[freeBlock] = FAT_EOF;
   //create the new subDirectory with its first entry being the parent
   dir_entry subDirectory[ENTRY_COUNT];
@@ -318,7 +437,7 @@ FS::mkdir(std::string dirpath)
   strcpy(parent.file_name, "..");
   parent.type = TYPE_DIR;
   parent.size = 0;
-  parent.first_blk = CWD;
+  parent.first_blk = dirBlock;
   parent.access_rights = 0;
   subDirectory[0] = parent;
 
@@ -330,7 +449,22 @@ FS::mkdir(std::string dirpath)
     std::cout <<"Failed when writing the subDirectory to disk" << std::endl;
     return -1;
   }
-  saveCWD();
+  if(int(CWD) == dirBlock)
+  {
+    memcpy(currentDir, directory, sizeof(currentDir));
+    saveCWD();
+  }
+  else
+  {
+    uint8_t buffer[BLOCK_SIZE];
+    memset(buffer, 0 , BLOCK_SIZE);
+    memcpy(buffer,directory , sizeof(directory));
+    if(disk.write(dirBlock, buffer) == -1)//Save the directory
+    {
+      std::cout <<"Failed when writing the directory to disk" << std::endl;
+      return -1;
+    }
+  }
   saveFAT();
     std::cout << "FS::mkdir(" << dirpath << ")\n";
     return 0;
@@ -340,13 +474,15 @@ FS::mkdir(std::string dirpath)
 int
 FS::cd(std::string dirpath)
 {
-  int dirEntry = locateEntry(currentDir, dirpath, TYPE_DIR);
-  if(dirEntry == -1)
+  dir_entry directory[ENTRY_COUNT];
+  std::string nameOfDir;
+  int dirBlock = loadDirectory(dirpath, directory, TYPE_DIR, nameOfDir);
+  if(dirBlock == -1)
   {
     return -1;// Entry not found
   }
   saveCWD();//Save the previous CWD
-  CWD = currentDir[dirEntry].first_blk;
+  CWD = dirBlock;
   loadCWD();//Load in the new CWD
     std::cout << "FS::cd(" << dirpath << ")\n";
     return 0;
@@ -373,7 +509,7 @@ FS::pwd()
   while(childBlock != ROOT_BLOCK)
   {
 
-    memset(buffer, 0, BLOCK_SIZE);
+     memset(buffer, 0, BLOCK_SIZE);
     disk.read(parentBlock, buffer);
     memcpy(&parent, buffer, sizeof(parent));
     for (int i = 0; i < ENTRY_COUNT; i++)
@@ -549,7 +685,7 @@ std::string FS::readFAT(int startBlock)
 }
 int FS::locateEntry(dir_entry* directory, const std::string& filepath, int type)
 {
-  //return the index to the fileentry located in CWD
+  //return the index to the fileentry located in directory
   for (int i = 0; i < ENTRY_COUNT; i++)
   {
     std::string nameInDir;
@@ -559,7 +695,7 @@ int FS::locateEntry(dir_entry* directory, const std::string& filepath, int type)
       return i;
     }
   }
-  std::cout << "Entry: " << filepath << " could not be found " << std::endl;
+
   return -1;
 }
 int FS::saveDataToDisk(const std::string& data)
@@ -729,6 +865,7 @@ int FS::loadDirectory(const std::string& filepath, dir_entry* theDirectory, int 
   std::vector<std::string> sepVec;
   std::string str;
   std::istringstream path(filepath);
+  int subDirBlock = CWD;//assumes CWD at start
   while (std::getline(path,str,'/'))
   {
     if(str !="")
@@ -739,6 +876,8 @@ int FS::loadDirectory(const std::string& filepath, dir_entry* theDirectory, int 
 
   if(filepath[0] == '/')//Absolute path
   {
+    subDirBlock = ROOT_BLOCK;//Start at ROOT_BLOCK
+    std::cout << "Path is absolute" << std::endl;
     disk.read(ROOT_BLOCK, buffer);
     memcpy(&loadedDir, buffer, sizeof(loadedDir));
   }
@@ -746,7 +885,7 @@ int FS::loadDirectory(const std::string& filepath, dir_entry* theDirectory, int 
   {
     memcpy(&loadedDir, currentDir, sizeof(loadedDir));
   }
-  int count = 0;
+  int count = 0;//Is the number of subdirectories in the filepath seperated by '/'
   if(type == TYPE_DIR)
   {
     count = sepVec.size();//Path is just only directories
@@ -756,7 +895,7 @@ int FS::loadDirectory(const std::string& filepath, dir_entry* theDirectory, int 
     count = sepVec.size() -1;//Path is ending with a filename
   }
   dir_entry subDirEntry;
-  int subDirBlock = ROOT_BLOCK;
+
   for (int i = 0; i < count; i++)
   {
     int dirIndex = locateEntry(loadedDir, sepVec[i], TYPE_DIR);
@@ -769,8 +908,15 @@ int FS::loadDirectory(const std::string& filepath, dir_entry* theDirectory, int 
     disk.read(subDirBlock, buffer);
     memcpy(&loadedDir, buffer, sizeof(loadedDir));
   }
+  if(sepVec.size() > 0)
+  {
+    lastName = std::string(sepVec[sepVec.size()-1]);//either the last loaded directory or a name of a file
+  }
+  else
+  {
+    lastName = "Root";
+  }
 
-  lastName = std::string(sepVec[sepVec.size()-1]);//either the last loaded directory or a name of a file
 
   memcpy(theDirectory, loadedDir, sizeof(loadedDir));
 

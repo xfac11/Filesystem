@@ -55,7 +55,7 @@ private:
     int saveDataToDisk(const std::string& data);
     int saveDataToDisk(int startBlock, const std::string& data);
     //Checks if name already exist and gives error otherwise returns a free entry
-    int locateFreeEntry(dir_entry* directory, const std::string& name, int type);
+    int locateFreeEntry(dir_entry* directory, const std::string& name);
     //Checks if name exist and returns its index
     int locateEntry(dir_entry* directory, const std::string& filepath, int type);
     //creates an entry and insert it into currentdir[entryIndex]
